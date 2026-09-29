@@ -1,0 +1,78 @@
+# moshi-lite
+
+A thin, self-owned local gateway that serves the Moshi mobile app's
+**workspace sidebar** (workspaces → tabs → panes → agents) from a running
+[Herdr](https://github.com/herdrdev/herdr) server.
+
+It replaces the cloud-facing, closed-source `moshi-hook` daemon for this one
+use case: no Moshi API, no pairing, no `hostSecret`, no agent hooks, no push,
+no approvals. The phone reaches it over your own SSH connection (Tailscale
+works), where the loopback gateway is the only transport.
+
+## Scope
+
+Implemented endpoints (Moshi host-gateway contract `protocolVersion: 1`):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/version` | Capability handshake (`events.watch.workspaces`) |
+| `GET /v1/muxes` | Herdr mux list for the app's session picker |
+| `GET /v1/workspaces` | Normalized workspace tree (Herdr snapshot) |
+| `GET /v1/workspaces/panes` | Inline pane refresh for one tab |
+| `POST /v1/workspaces/focus` | Focus workspace/tab/pane/agent in Herdr |
+| `GET /events` | WebSocket: gateway hello, `watch.workspaces`, live tree frames |
+
+Non-goals for now: cloud API/WS, pairing, notifications, usage, approvals,
+transcripts/Chat View, diff viewer, web client, hook installation.
+
+## Architecture
+
+```
+Moshi app ──SSH/Tailscale──▶ 127.0.0.1:24543 (moshi-lite)
+                                   │  axum: HTTP + /events WS
+                                   │  poller (default 1s)
+                                   ▼
+                            ~/.config/herdr/herdr.sock
+                            {id, method, params} JSON lines
+                            session.snapshot / *.focus
+```
+
+- `src/herdr/` — Herdr adapter. `SocketBackend` speaks the JSON-line socket
+  protocol directly (one connection per request). The `HerdrBackend` trait is
+  what tests mock.
+- `src/mapping.rs` — Herdr snapshot → Moshi tree mapping, plus observed
+  `statusChangedAt` tracking (`approx` marks a first sighting).
+- `src/state.rs` — shared state + background poller; only changes are pushed.
+- `src/gateway.rs` — the HTTP/WS surface.
+
+## Running
+
+```bash
+cargo run -- serve                 # 127.0.0.1:24543
+cargo run -- serve --listen 127.0.0.1:24599 --poll-interval-ms 500
+cargo run -- serve --herdr-socket ~/.config/herdr/herdr.sock
+```
+
+The listen address must be loopback (enforced). `$HERDR_SOCKET_PATH` overrides
+the Herdr socket path.
+
+## Testing
+
+```bash
+cargo test                         # unit + integration (mock Herdr, live WS)
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+Tests never touch a real Herdr server: `MockBackend` serves a fixture captured
+from Herdr 0.9.1 (`tests/fixtures/herdr-snapshot.json`), and socket tests spin
+up a throwaway Unix listener.
+
+## Roadmap
+
+1. Install as `~/.local/bin/moshi-hook` so the app's host detection finds it.
+2. PTY attach (`/v1/pty`) so the sidebar's terminal action works.
+3. Optional agent hook extension for exact `blocked` timing and conversation
+   titles (Herdr already reports agent status without it).
+4. Session-lookup resolution (ssh-connection/mosh-port) to mark the caller's
+   focused branch and multi-session mux support.

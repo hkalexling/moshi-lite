@@ -1,0 +1,144 @@
+{
+  "version": "0.9.1",
+  "protocol": 22,
+  "focused_workspace_id": "wA",
+  "focused_tab_id": "wA:t1",
+  "focused_pane_id": "wA:p1",
+  "workspaces": [
+    {
+      "workspace_id": "wA",
+      "label": "app-moshi",
+      "number": 1,
+      "focused": true,
+      "pane_count": 3,
+      "tab_count": 2,
+      "active_tab_id": "wA:t1",
+      "agent_status": "working"
+    },
+    {
+      "workspace_id": "wB",
+      "label": "nemoir",
+      "number": 2,
+      "focused": false,
+      "pane_count": 1,
+      "tab_count": 1,
+      "active_tab_id": "wB:t1",
+      "agent_status": "idle"
+    }
+  ],
+  "tabs": [
+    {
+      "tab_id": "wA:t1",
+      "workspace_id": "wA",
+      "label": "1 · claude - app-moshi",
+      "number": 1,
+      "focused": true,
+      "pane_count": 2,
+      "agent_status": "working"
+    },
+    {
+      "tab_id": "wA:t2",
+      "workspace_id": "wA",
+      "label": "2 · shell",
+      "number": 2,
+      "focused": false,
+      "pane_count": 1
+    },
+    {
+      "tab_id": "wB:t1",
+      "workspace_id": "wB",
+      "label": "1 · π - nemoir",
+      "number": 1,
+      "focused": false,
+      "pane_count": 1,
+      "agent_status": "idle"
+    }
+  ],
+  "panes": [
+    {
+      "pane_id": "wA:p1",
+      "tab_id": "wA:t1",
+      "workspace_id": "wA",
+      "label": "claude",
+      "cwd": "/home/user/Code/app-moshi",
+      "foreground_cwd": "/home/user/Code/app-moshi",
+      "focused": true,
+      "agent": "claude",
+      "agent_status": "working",
+      "agent_session": {
+        "agent": "claude",
+        "kind": "id",
+        "source": "herdr:claude",
+        "value": "sess-claude-1"
+      },
+      "terminal_title": "claude",
+      "revision": 12
+    },
+    {
+      "pane_id": "wA:p2",
+      "tab_id": "wA:t1",
+      "workspace_id": "wA",
+      "label": "shell",
+      "cwd": "/home/user/Code/app-moshi",
+      "focused": false,
+      "revision": 3
+    },
+    {
+      "pane_id": "wA:p3",
+      "tab_id": "wA:t2",
+      "workspace_id": "wA",
+      "label": "ranger",
+      "cwd": "/home/user/Code/app-moshi",
+      "focused": false,
+      "revision": 5
+    },
+    {
+      "pane_id": "wB:p1",
+      "tab_id": "wB:t1",
+      "workspace_id": "wB",
+      "label": "π - nemoir",
+      "cwd": "/home/user/Code/nemoir",
+      "foreground_cwd": "/home/user/Code/nemoir",
+      "focused": false,
+      "agent": "pi",
+      "agent_status": "idle",
+      "agent_session": {
+        "agent": "pi",
+        "kind": "path",
+        "source": "herdr:pi",
+        "value": "/home/user/.pi/agent/sessions/x.jsonl"
+      },
+      "revision": 8
+    }
+  ],
+  "agents": [
+    {
+      "pane_id": "wA:p1",
+      "agent": "claude",
+      "agent_status": "working",
+      "agent_session": {
+        "agent": "claude",
+        "kind": "id",
+        "source": "herdr:claude",
+        "value": "sess-claude-1"
+      },
+      "state_change_seq": 42,
+      "focused": true,
+      "cwd": "/home/user/Code/app-moshi"
+    },
+    {
+      "pane_id": "wB:p1",
+      "agent": "pi",
+      "agent_status": "idle",
+      "agent_session": {
+        "agent": "pi",
+        "kind": "path",
+        "source": "herdr:pi",
+        "value": "/home/user/.pi/agent/sessions/x.jsonl"
+      },
+      "state_change_seq": 17,
+      "focused": false,
+      "cwd": "/home/user/Code/nemoir"
+    }
+  ]
+}
