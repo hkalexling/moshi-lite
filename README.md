@@ -191,10 +191,11 @@ Every invocation is logged to `~/.local/state/moshi-lite/invocations.log`.
   `cargo clippy --all-targets -- -D warnings`, and `cargo test` on pushes to
   `main` and on pull requests.
 - **Release** (`.github/workflows/release.yml`) runs when `Cargo.toml` changes
-  on `main`. If the version has no matching `vX.Y.Z` tag yet, it creates the
-  tag, opens a draft release with generated notes, builds Linux (x86_64,
-  aarch64) and macOS (arm64, x86_64) tarballs, uploads them, and publishes the
-  release.
+  on `main` (or manually via workflow dispatch). If `vX.Y.Z` has no published
+  release yet, it tags the commit, opens (or reuses) a draft release with
+  generated notes, builds Linux (x86_64, aarch64) and macOS (arm64, x86_64)
+  tarballs, uploads them, and publishes the release. A failed run can simply
+  be re-run.
 
 To cut a release, bump `version` in `Cargo.toml` and merge to `main`.
 
