@@ -15,12 +15,14 @@ Implemented endpoints (Moshi host-gateway contract `protocolVersion: 1`):
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /v1/version` | Capability handshake (`events.watch.workspaces`) |
+| `GET /v1/version` | Capability handshake (`events.watch.workspaces`, `events.doctor`, `workspaces.live-session`) |
 | `GET /v1/muxes` | Herdr mux list for the app's session picker |
 | `GET /v1/workspaces` | Normalized workspace tree (Herdr snapshot) |
 | `GET /v1/workspaces/panes` | Inline pane refresh for one tab |
 | `POST /v1/workspaces/focus` | Focus workspace/tab/pane/agent in Herdr |
-| `GET /events` | WebSocket: gateway hello, `watch.workspaces`, live tree frames |
+| `GET /v1/diff/start` | Diff-support probe: answers 405 like the official daemon |
+| `GET /v1/integrations` | Empty hook list (moshi-lite installs no agent hooks) |
+| `GET /events` | WebSocket: gateway hello, watch, doctor, workspaces/context frames |
 
 Non-goals for now: cloud API/WS, pairing, notifications, usage, approvals,
 transcripts/Chat View, diff viewer, web client, hook installation.
@@ -45,6 +47,28 @@ Moshi app ──SSH/Tailscale──▶ 127.0.0.1:24543 (moshi-lite)
 - `src/state.rs` — shared state + background poller; only changes are pushed.
 - `src/gateway.rs` — the HTTP/WS surface.
 
+## How the app connects
+
+The app SSHes in and runs the CLI probes first (`probe --json`, `doctor
+--json`), then talks to the gateway over the SSH-forwarded port:
+
+1. `GET /v1/version` — capabilities. `events.watch.workspaces`,
+   `workspaces.live-session` and `events.doctor` are what unlock the sidebar
+   sockets.
+2. `GET /v1/diff/start` — a probe that expects `405` (the endpoint is a POST);
+   answering `404` makes the app abandon the rest of the session setup.
+3. `GET /events?doctor=refresh` — the gateway pushes `{"doctor": …}`
+   immediately after the hello frame.
+4. `GET /events?session=ssh&sshConnection=…` — the session-scoped sidebar
+   socket. The app sends `{"watch":{"workspaces":true}}`; the gateway answers
+   with `{"watching":{…},"doctor":…}` followed by `{"workspaces":…}` frames
+   and, when context is watched, `{"context":…}` frames. Session-lookup
+   parameters are accepted and ignored: the tree is the loopback Herdr
+   resolution (the `default` session).
+
+Taps return as `POST /v1/workspaces/focus` and are applied through the Herdr
+socket API (`pane.focus`, with an `agent.focus` fallback).
+
 ## Running
 
 ```bash
@@ -54,7 +78,8 @@ cargo run -- serve --herdr-socket ~/.config/herdr/herdr.sock
 ```
 
 The listen address must be loopback (enforced). `$HERDR_SOCKET_PATH` overrides
-the Herdr socket path.
+the Herdr socket path. `RUST_LOG=moshi_lite=debug` enables per-request and
+WebSocket-frame logging.
 
 ## Testing
 
@@ -94,9 +119,16 @@ cp target/release/moshi-lite ~/.local/bin/moshi-hook
 
 ## Roadmap
 
-1. Install as `~/.local/bin/moshi-hook` so the app's host detection finds it.
-2. PTY attach (`/v1/pty`) so the sidebar's terminal action works.
+Done:
+- CLI compatibility (`probe`, `doctor`) and the `/events` handshake above.
+- Installed as `~/.local/bin/moshi-hook`; the official binary stays beside it
+  (`moshi-hook.official`) as the fallback for `context` / `cwd-list` /
+  `servers`.
+
+Next:
+1. `/v1/pty` so the sidebar's terminal action can attach.
+2. Session-lookup resolution (`ssh-connection` / `mosh-port`) to mark the
+   caller's focused branch, and multi-session mux support.
 3. Optional agent hook extension for exact `blocked` timing and conversation
    titles (Herdr already reports agent status without it).
-4. Session-lookup resolution (ssh-connection/mosh-port) to mark the caller's
-   focused branch and multi-session mux support.
+4. Port `context` / `cwd-list` and drop the official-binary fallback.

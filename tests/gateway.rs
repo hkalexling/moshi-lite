@@ -272,6 +272,41 @@ async fn events_watch_sends_context_frame() {
 }
 
 #[tokio::test]
+async fn integrations_returns_an_empty_list() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock));
+
+    let (status, body) = get_json(app, "/v1/integrations").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["integrations"]
+            .as_array()
+            .expect("integrations array")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn integrations_install_is_not_implemented() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/integrations")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
 async fn events_watch_streams_tree_updates() {
     let mock = Arc::new(MockBackend::new(fixture_snapshot()));
     let state = test_state(mock.clone());

@@ -28,6 +28,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/workspaces/panes", get(get_workspace_panes))
         .route("/v1/workspaces/focus", post(post_workspaces_focus))
         .route("/v1/diff/start", get(diff_start_probe).post(diff_start))
+        .route(
+            "/v1/integrations",
+            get(get_integrations).post(post_integrations),
+        )
         .route("/events", get(get_events))
         .layer(middleware::from_fn(log_request))
         .with_state(state)
@@ -44,7 +48,7 @@ async fn log_request(request: Request, next: Next) -> Response {
         .unwrap_or("")
         .to_string();
     let response = next.run(request).await;
-    tracing::info!(
+    tracing::debug!(
         %method,
         %uri,
         status = %response.status(),
@@ -273,6 +277,20 @@ async fn diff_start() -> Response {
         .into_response()
 }
 
+/// The hooks/integrations sheet: moshi-lite installs no agent hooks, so the
+/// list is genuinely empty.
+async fn get_integrations() -> Json<Value> {
+    Json(json!({ "integrations": [] }))
+}
+
+async fn post_integrations() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "moshi-lite does not install agent hooks" })),
+    )
+        .into_response()
+}
+
 async fn get_events(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -282,7 +300,7 @@ async fn get_events(
 }
 
 async fn events_session(mut socket: WebSocket, state: Arc<AppState>, query: EventsQuery) {
-    tracing::info!(
+    tracing::debug!(
         doctor = query.doctor.as_deref().unwrap_or(""),
         "events: client connected"
     );
@@ -316,7 +334,7 @@ async fn events_session(mut socket: WebSocket, state: Arc<AppState>, query: Even
             message = socket.recv() => {
                 match message {
                     Some(Ok(Message::Text(text))) => {
-                        tracing::info!(frame = %text.as_str(), "events: client frame");
+                        tracing::debug!(frame = %text.as_str(), "events: client frame");
                         let Some((workspaces, context)) = parse_watch(text.as_str()) else {
                             continue;
                         };
