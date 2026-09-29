@@ -64,6 +64,16 @@ async fn version_advertises_watch_capability() {
             .iter()
             .any(|capability| capability == "events.watch.workspaces")
     );
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability == "workspaces.live-session")
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability == "events.doctor")
+    );
 }
 
 #[tokio::test]
@@ -191,6 +201,74 @@ async fn focus_requires_a_target() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn diff_start_probe_answers_405() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock));
+
+    let (status, body) = get_json(app, "/v1/diff/start").await;
+
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(body["error"], "method not allowed");
+}
+
+#[tokio::test]
+async fn events_watch_sends_context_frame() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock);
+    state.poll_once().await.expect("poll");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let app = gateway::router(Arc::clone(&state));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/events?doctor=refresh"))
+            .await
+            .expect("connect");
+    let hello = next_json(&mut socket).await;
+    assert!(hello.get("gateway").is_some());
+    assert!(hello.get("servers").is_some());
+    let doctor = next_json(&mut socket).await;
+    assert!(doctor.get("doctor").is_some());
+
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"watch":{"workspaces":true,"context":true}}"#.into(),
+        ))
+        .await
+        .expect("watch request");
+
+    let ack = next_json(&mut socket).await;
+    assert_eq!(ack["watching"]["workspaces"], true);
+    assert_eq!(ack["watching"]["context"], true);
+    assert!(ack.get("doctor").is_some());
+
+    let mut saw_workspaces = false;
+    let mut saw_context = false;
+    for _ in 0..4 {
+        let frame = next_json(&mut socket).await;
+        if frame.get("workspaces").is_some() {
+            saw_workspaces = true;
+        }
+        if frame.get("context").is_some() {
+            saw_context = true;
+            assert_eq!(frame["context"]["herdr"]["paneId"], "wA:p1");
+        }
+        if saw_workspaces && saw_context {
+            break;
+        }
+    }
+    assert!(saw_workspaces, "missing workspaces frame");
+    assert!(saw_context, "missing context frame");
+    server.abort();
 }
 
 #[tokio::test]

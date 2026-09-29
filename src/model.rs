@@ -8,7 +8,11 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Capabilities advertised on `/v1/version` and the `/events` gateway frame.
 pub fn capabilities() -> Vec<String> {
-    vec!["events.watch.workspaces".to_string()]
+    vec![
+        "events.watch.workspaces".to_string(),
+        "events.doctor".to_string(),
+        "workspaces.live-session".to_string(),
+    ]
 }
 
 /// `GET /v1/version`
