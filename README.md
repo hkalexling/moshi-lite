@@ -68,6 +68,30 @@ Tests never touch a real Herdr server: `MockBackend` serves a fixture captured
 from Herdr 0.9.1 (`tests/fixtures/herdr-snapshot.json`), and socket tests spin
 up a throwaway Unix listener.
 
+## CLI compatibility
+
+The Moshi app SSHes in and runs `moshi-hook probe --json` and
+`moshi-hook doctor --json` to decide whether the host is usable. moshi-lite
+implements both:
+
+- `probe --json` -> `{"installed":true,"running":true,"gateway":true,
+  "version":"0.1.0"}` when the local gateway answers `/v1/version`.
+- `doctor --json` -> feature verdicts with `workspaces` **ok** (other features
+  are reported as not supported by moshi-lite).
+
+Anything else (for example `cwd-list`, `context`, `servers`) is forwarded to
+the official binary kept at `~/.local/bin/moshi-hook.official`, except
+`install` / `pair` / `host`, which are refused so Moshi-owned hooks and cloud
+pairing cannot be re-enabled accidentally. Every invocation is logged to
+`~/.local/state/moshi-lite/invocations.log` for debugging.
+
+Install the CLI as the app expects:
+
+```bash
+cargo build --release
+cp target/release/moshi-lite ~/.local/bin/moshi-hook
+```
+
 ## Roadmap
 
 1. Install as `~/.local/bin/moshi-hook` so the app's host detection finds it.

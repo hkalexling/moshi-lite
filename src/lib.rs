@@ -4,6 +4,7 @@
 //! Scope: `/v1/version`, `/v1/muxes`, `/v1/workspaces` (+ `panes`, `focus`),
 //! and the `/events` WebSocket watch. No cloud, no pairing, no agent hooks.
 
+pub mod cli;
 pub mod config;
 pub mod gateway;
 pub mod herdr;

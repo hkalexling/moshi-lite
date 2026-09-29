@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
+use moshi_lite::cli;
 use moshi_lite::config::Config;
 use moshi_lite::gateway;
 use moshi_lite::herdr::socket::SocketBackend;
@@ -13,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "moshi-lite",
+    name = "moshi-hook",
     version,
     about = "Thin local Moshi gateway backed by Herdr"
 )]
@@ -28,6 +29,9 @@ enum Command {
     Serve(ServeArgs),
     /// Print the version.
     Version,
+    /// Unknown commands fall back to the official binary when possible.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Args)]
@@ -45,18 +49,45 @@ struct ServeArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    cli::log_invocation();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    let cli = Cli::parse();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // The Moshi app runs these two over SSH; handle them before clap so extra
+    // flags can never send a health probe to the official binary by accident.
+    match args.first().map(String::as_str) {
+        Some("probe") => {
+            run_probe(&args).await;
+            return Ok(());
+        }
+        Some("doctor") => {
+            run_doctor(&args).await;
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let cli = Cli::parse_from(std::env::args());
     match cli.command {
         Some(Command::Serve(args)) => serve(args).await,
         Some(Command::Version) => {
             println!("moshi-lite {}", env!("CARGO_PKG_VERSION"));
             Ok(())
+        }
+        Some(Command::External(args)) => {
+            if cli::forward_allowed(&args) {
+                cli::forward_to_official(&args)
+            } else {
+                eprintln!(
+                    "moshi-lite: refusing to run {args:?}: agent hook installation and cloud pairing are disabled"
+                );
+                std::process::exit(2);
+            }
         }
         None => {
             Cli::command().print_help()?;
@@ -64,6 +95,72 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_probe(args: &[String]) {
+    let report = cli::probe(listen_arg(args)).await;
+    if json_flag(args) {
+        match serde_json::to_string(&report) {
+            Ok(text) => println!("{text}"),
+            Err(error) => {
+                eprintln!("moshi-lite: encode probe report: {error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("installed: {}", report.installed);
+        println!("running:   {}", report.running);
+        println!("gateway:   {}", report.gateway);
+        println!("version:   {}", report.version);
+    }
+}
+
+async fn run_doctor(args: &[String]) {
+    let listen = listen_arg(args);
+    let gateway = cli::gateway_version(listen).await;
+    let tmux = cli::detect_tool("tmux", "-V");
+    let herdr = cli::detect_tool("herdr", "--version");
+    let hostname = gethostname::gethostname().to_string_lossy().into_owned();
+    let report = cli::doctor_report(
+        &hostname,
+        gateway.as_deref(),
+        tmux.as_deref(),
+        herdr.as_deref(),
+    );
+
+    if json_flag(args) {
+        println!("{}", serde_json::to_string(&report).unwrap_or_default());
+    } else {
+        if let Some(features) = report["features"].as_array() {
+            for feature in features {
+                println!(
+                    "{:>5}  {:24}  {}",
+                    feature["status"].as_str().unwrap_or("?"),
+                    feature["name"].as_str().unwrap_or(""),
+                    feature["detail"].as_str().unwrap_or("")
+                );
+            }
+        }
+    }
+}
+
+fn json_flag(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--json")
+}
+
+fn listen_arg(args: &[String]) -> std::net::SocketAddr {
+    let mut iterator = args.iter();
+    while let Some(arg) = iterator.next() {
+        if arg == "--listen"
+            && let Some(value) = iterator.next()
+            && let Ok(addr) = value.parse()
+        {
+            return addr;
+        }
+    }
+    "127.0.0.1:24543"
+        .parse()
+        .expect("default listen address is valid")
 }
 
 async fn serve(args: ServeArgs) -> anyhow::Result<()> {
