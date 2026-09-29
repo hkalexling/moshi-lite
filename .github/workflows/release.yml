@@ -1,0 +1,136 @@
+name: Release
+
+# Fires when the package version changes on main (a Cargo.toml bump lands).
+# If v<version> is not tagged yet, a draft release is created, binaries are
+# built for every supported target and attached, then the release is published.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - id: version
+        name: Read Cargo.toml version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "v$version is already tagged; nothing to release"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "new version v$version"
+          fi
+
+  create-release:
+    name: Create draft release
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.version.outputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "v${{ needs.version.outputs.version }}" \
+            --generate-notes \
+            --draft
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [version, create-release]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            host: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            host: x86_64-unknown-linux-gnu
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            host: aarch64-apple-darwin
+            target: aarch64-apple-darwin
+          - os: macos-14
+            host: aarch64-apple-darwin
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build (native)
+        if: matrix.target == matrix.host
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.target != matrix.host
+        run: |
+          cargo install cross --locked
+          cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          tar -czf "moshi-lite-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" moshi-lite
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v${{ needs.version.outputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            "moshi-lite-${{ matrix.target }}.tar.gz" \
+            --clobber
+
+  publish:
+    name: Publish release
+    needs: [version, build]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "v${{ needs.version.outputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest
