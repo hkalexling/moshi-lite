@@ -1,8 +1,9 @@
 name: Release
 
 # Fires when the package version changes on main (a Cargo.toml bump lands).
-# If v<version> is not tagged yet, a draft release is created, binaries are
-# built for every supported target and attached, then the release is published.
+# If v<version> has no published release yet, a draft is created (or reused),
+# binaries are built for every supported target and attached, then the release
+# is published.
 on:
   push:
     branches: [main]
@@ -36,15 +37,21 @@ jobs:
 
       - id: version
         name: Read Cargo.toml version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+          # A published release means this version is done. A missing or still
+          # draft release (for example after a failed build) means: (re)try.
+          published=$(gh release view "v$version" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft --jq 'if .isDraft then "" else "yes" end' 2>/dev/null || true)
+          if [ "$published" = "yes" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "v$version is already tagged; nothing to release"
+            echo "v$version is already released; nothing to do"
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "new version v$version"
+            echo "will release v$version"
           fi
 
   create-release:
@@ -53,16 +60,20 @@ jobs:
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Create draft release and tag
+      - name: Create or reuse draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ needs.version.outputs.version }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "v${{ needs.version.outputs.version }}" \
-            --generate-notes \
-            --draft
+          tag="v${{ needs.version.outputs.version }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$tag already exists (draft); reusing it"
+          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --generate-notes --draft
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$tag" --generate-notes --draft
+          fi
 
   build:
     name: Build ${{ matrix.target }}
