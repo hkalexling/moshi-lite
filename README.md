@@ -2,13 +2,31 @@
 
 A thin, self-owned local gateway that serves the Moshi mobile app's
 **workspace sidebar** (workspaces → tabs → panes → agents) from a running
-[Herdr](https://herdr.dev) server.
+[Herdr](https://herdr.dev) server, over your own SSH connection.
 
-It replaces the cloud-facing, closed-source `moshi-hook` daemon for this one
-use case: no Moshi cloud API, no pairing, no `hostSecret`, no push, no
-approvals, no usage collection, no Chat View, and no agent hooks. The phone
-reaches it over your own SSH connection (Tailscale works); the gateway itself
-is loopback-only.
+## Why
+
+The official Moshi host daemon (`moshi-hook`) is a closed-source binary that
+does far more than the sidebar: it pairs the host with Moshi's cloud,
+collects usage, installs agent hooks, and powers Chat View, approvals, inbox
+notifications, and push. If all you want is the app's native workspace list —
+workspaces → tabs → panes → agents — backed by Herdr, none of that needs to
+leave your machines.
+
+moshi-lite exists to keep exactly that one feature and drop the rest:
+
+- **Self-owned and auditable** — a small Rust service you can read end to end,
+  instead of a closed-source daemon that updates itself.
+- **No Moshi cloud** — no pairing, no `hostSecret`, no account, no usage
+  collection, and no outbound connection to Moshi. The only transport is your
+  own SSH session to a loopback-only HTTP/WebSocket gateway.
+- **No agent hooks** — nothing is installed into Pi, Codex, Claude Code, or
+  anything else; agent status comes from Herdr's own state.
+- **No unrelated app surfaces** — no Chat View, diff viewer, browser or
+  simulator preview, approvals, push, or inbox. Just the sidebar and jump to.
+
+The app still works because moshi-lite implements just enough of the Moshi
+host-gateway contract for the sidebar to load and taps to focus Herdr.
 
 ## Scope
 
