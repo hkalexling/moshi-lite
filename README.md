@@ -1,17 +1,18 @@
 # moshi-lite
 
-A thin, self-owned local gateway that serves the Moshi mobile app's
-**workspace sidebar** (workspaces → tabs → panes → agents) from a running
-[Herdr](https://herdr.dev) server, over your own SSH connection.
+A thin, self-owned local gateway that serves the [Moshi](https://getmoshi.app/)
+mobile app's **workspace sidebar** (workspaces → tabs → panes → agents) from a
+running [Herdr](https://herdr.dev) server, over your own SSH connection.
 
 ## Why
 
-The official Moshi host daemon (`moshi-hook`) is a closed-source binary that
-does far more than the sidebar: it pairs the host with Moshi's cloud,
-collects usage, installs agent hooks, and powers Chat View, approvals, inbox
-notifications, and push. If all you want is the app's native workspace list —
-workspaces → tabs → panes → agents — backed by Herdr, none of that needs to
-leave your machines.
+The official Moshi host daemon
+([`moshi-hook`](https://getmoshi.app/docs/install-moshi-hook)) is a
+closed-source binary that does far more than the sidebar: it pairs the host
+with Moshi's cloud, collects usage, installs agent hooks, and powers Chat
+View, approvals, inbox notifications, and push. If all you want is the app's
+native workspace list — workspaces → tabs → panes → agents — backed by Herdr,
+none of that needs to leave your machines.
 
 moshi-lite exists to keep exactly that one feature and drop the rest:
 
@@ -189,28 +190,12 @@ Every invocation is logged to `~/.local/state/moshi-lite/invocations.log`.
 
 - **CI** (`.github/workflows/ci.yml`) runs `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`, and `cargo test` on pushes to
-  `main` and on pull requests.
+  `master` and on pull requests.
 - **Release** (`.github/workflows/release.yml`) runs when `Cargo.toml` changes
-  on `main` (or manually via workflow dispatch). If `vX.Y.Z` has no published
+  on `master` (or manually via workflow dispatch). If `vX.Y.Z` has no published
   release yet, it tags the commit, opens (or reuses) a draft release with
   generated notes, builds Linux (x86_64, aarch64) and macOS (arm64, x86_64)
   tarballs, uploads them, and publishes the release. A failed run can simply
   be re-run.
 
-To cut a release, bump `version` in `Cargo.toml` and merge to `main`.
-
-## Roadmap
-
-Done:
-- CLI compatibility (`probe`, `doctor`, `version`) and the `/events` handshake.
-- Workspace tree, pane refresh, focus, and the diff/integrations probes.
-- Installed as `~/.local/bin/moshi-hook`; the Moshi app opens the sidebar and
-  jumps to workspaces.
-
-Next:
-1. `/v1/pty` so the sidebar's terminal action can attach.
-2. Session-lookup resolution (`ssh-connection` / `mosh-port`) to mark the
-   caller's focused branch, and multi-session Herdr support.
-3. Optional trimmed agent hook extension for exact `blocked` timing and
-   conversation titles (Herdr already reports agent status without it).
-4. Port `context` / `cwd-list` from the official CLI if the app needs them.
+To cut a release, bump `version` in `Cargo.toml` and merge to `master`.

@@ -1,12 +1,12 @@
 name: Release
 
-# Fires when the package version changes on main (a Cargo.toml bump lands).
+# Fires when the package version changes on master (a Cargo.toml bump lands).
 # If v<version> has no published release yet, a draft is created (or reused),
 # binaries are built for every supported target and attached, then the release
 # is published.
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - Cargo.toml
   workflow_dispatch:
