@@ -57,15 +57,16 @@ moshi-lite is a single binary, but the Moshi app looks for it under the name
 
 Every release publishes tarballs for Linux (x86_64, aarch64) and macOS
 (arm64, x86_64) named `moshi-lite-<target>.tar.gz`, for example
-`moshi-lite-x86_64-unknown-linux-gnu.tar.gz`. The repository is private, so
-download with an authenticated `gh` CLI:
+`moshi-lite-x86_64-unknown-linux-gnu.tar.gz`:
 
 ```bash
-gh release download --repo hkalexling/moshi-lite \
-  --pattern 'moshi-lite-x86_64-unknown-linux-gnu.tar.gz'
+curl -fsSLO https://github.com/hkalexling/moshi-lite/releases/latest/download/moshi-lite-x86_64-unknown-linux-gnu.tar.gz
 tar -xzf moshi-lite-x86_64-unknown-linux-gnu.tar.gz
 install -m755 moshi-lite ~/.local/bin/moshi-hook
 ```
+
+Replace the target with `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`,
+or `x86_64-apple-darwin` as needed.
 
 ### From source
 
