@@ -69,6 +69,10 @@ async fn main() -> anyhow::Result<()> {
             run_doctor(&args).await;
             return Ok(());
         }
+        Some("cwd-list") => {
+            run_cwd_list(&args);
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -142,6 +146,35 @@ async fn run_doctor(args: &[String]) {
             }
         }
     }
+}
+
+fn run_cwd_list(args: &[String]) {
+    let limit = limit_arg(args).filter(|limit| *limit > 0).unwrap_or(10);
+    let entries = cli::cwd_list(limit);
+    if json_flag(args) {
+        match serde_json::to_string(&entries) {
+            Ok(text) => println!("{text}"),
+            Err(error) => {
+                eprintln!("moshi-lite: encode cwd-list: {error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        cli::print_cwd_list(&entries);
+    }
+}
+
+fn limit_arg(args: &[String]) -> Option<usize> {
+    let mut iterator = args.iter();
+    while let Some(arg) = iterator.next() {
+        if arg == "--limit" {
+            return iterator.next().and_then(|value| value.parse().ok());
+        }
+        if let Some(value) = arg.strip_prefix("--limit=") {
+            return value.parse().ok();
+        }
+    }
+    None
 }
 
 fn json_flag(args: &[String]) -> bool {

@@ -1,6 +1,6 @@
 [package]
 name = "moshi-lite"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -19,6 +19,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 [dev-dependencies]
 futures-util = "0.3.34"
 http-body-util = "0.1.5"
+tempfile = "3"
 tokio-tungstenite = "0.30.0"
 tower = { version = "0.5.3", features = ["util"] }
 

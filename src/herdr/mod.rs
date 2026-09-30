@@ -6,6 +6,7 @@ pub mod socket;
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::Value;
 
 /// Result of `session.snapshot` — the subset used by the sidebar.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -128,6 +129,67 @@ pub enum FocusTarget {
     Agent(String),
 }
 
+/// A rename/close target expressed in the gateway's terms. The HTTP layer
+/// resolves the most specific id first: pane, then tab, then workspace, which
+/// is also the precedence the official daemon uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeTarget {
+    Workspace(String),
+    Tab(String),
+    Pane(String),
+}
+
+impl NodeTarget {
+    /// JSON field name the app uses for this id.
+    pub fn field(&self) -> &'static str {
+        match self {
+            NodeTarget::Workspace(_) => "workspaceId",
+            NodeTarget::Tab(_) => "tabId",
+            NodeTarget::Pane(_) => "paneId",
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            NodeTarget::Workspace(id) | NodeTarget::Tab(id) | NodeTarget::Pane(id) => id,
+        }
+    }
+}
+
+/// A workspace-create action expressed in the gateway's terms.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreateRequest {
+    pub cwd: Option<String>,
+    pub label: Option<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+/// Which node a create action should produce. The official daemon keys this on
+/// the most specific id in the request body (`paneId` > `tabId` >
+/// `workspaceId` > `cwd`) and always focuses the new node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateTarget {
+    /// No parent: a new workspace (`workspace.create`).
+    Workspace,
+    /// A new tab in this workspace (`tab.create`).
+    Tab(String),
+    /// A new split in the focused pane of this tab (`pane.split`).
+    TabPane(String),
+    /// A new split in this pane (`pane.split`).
+    Pane(String),
+}
+
+impl CreateTarget {
+    /// The scope name the app sees in the create response.
+    pub fn scope(&self) -> &'static str {
+        match self {
+            CreateTarget::Workspace => "workspace",
+            CreateTarget::Tab(_) => "tab",
+            CreateTarget::TabPane(_) | CreateTarget::Pane(_) => "pane",
+        }
+    }
+}
+
 /// Errors surfaced by a Herdr backend.
 #[derive(Debug, thiserror::Error)]
 pub enum HerdrError {
@@ -151,4 +213,17 @@ pub trait HerdrBackend: Send + Sync + 'static {
 
     /// Focus a workspace, tab, pane, or agent.
     async fn focus(&self, target: FocusTarget) -> Result<(), HerdrError>;
+
+    /// Rename a workspace, tab, or pane.
+    async fn rename(&self, target: NodeTarget, label: &str) -> Result<(), HerdrError>;
+
+    /// Close a workspace, tab, or pane.
+    async fn close(&self, target: NodeTarget) -> Result<(), HerdrError>;
+
+    /// Create a workspace, tab, or split pane. Returns the raw Herdr result.
+    async fn create(
+        &self,
+        target: CreateTarget,
+        request: CreateRequest,
+    ) -> Result<Value, HerdrError>;
 }

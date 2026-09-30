@@ -40,6 +40,9 @@ Implemented endpoints (Moshi host-gateway contract `protocolVersion: 1`):
 | `GET /v1/workspaces` | Normalized workspace tree (Herdr snapshot) |
 | `GET /v1/workspaces/panes` | Inline pane refresh for one tab |
 | `POST /v1/workspaces/focus` | Focus workspace/tab/pane/agent in Herdr |
+| `POST /v1/workspaces/create` | Create a node: workspace (`cwd`), tab (`workspaceId`), or split pane (`tabId`/`paneId`), always focused |
+| `POST /v1/workspaces/rename` | Rename a workspace/tab/pane (`paneId` > `tabId` > `workspaceId`) |
+| `POST /v1/workspaces/close` | Close a workspace/tab/pane (Herdr also closes a workspace with its last tab) |
 | `GET /v1/diff/start` | Diff-support probe: answers 405 like the official daemon |
 | `GET /v1/integrations` | Empty hook list (moshi-lite installs no agent hooks) |
 | `GET /events` | WebSocket: gateway hello, watch, doctor, workspaces/context frames |
@@ -50,8 +53,9 @@ transcripts/Chat View, diff viewer, web client, hook installation.
 ## Installation
 
 moshi-lite is a single binary, but the Moshi app looks for it under the name
-`moshi-hook`: its SSH probes run `moshi-hook probe --json` and
-`moshi-hook doctor --json`. Install it at `~/.local/bin/moshi-hook`.
+`moshi-hook`: its SSH probes run `moshi-hook probe --json`,
+`moshi-hook doctor --json`, and `moshi-hook cwd-list --json`. Install it at
+`~/.local/bin/moshi-hook`.
 
 ### Prebuilt binaries
 
@@ -112,7 +116,7 @@ Moshi app ──SSH/Tailscale──▶ 127.0.0.1:24543 (moshi-lite)
                                    ▼
                             ~/.config/herdr/herdr.sock
                             {id, method, params} JSON lines
-                            session.snapshot / *.focus
+                            session.snapshot / focus / create / rename / close
 ```
 
 - `src/herdr/` — Herdr adapter. `SocketBackend` speaks the JSON-line socket
@@ -143,7 +147,13 @@ The app SSHes in and runs the CLI probes first (`probe --json`, `doctor
    resolution (the `default` session).
 
 Taps return as `POST /v1/workspaces/focus` and are applied through the Herdr
-socket API (`pane.focus`, with an `agent.focus` fallback).
+socket API (`pane.focus`, with an `agent.focus` fallback). The app's create
+action posts `POST /v1/workspaces/create`, which maps the most specific id in
+the body to a Herdr node: `paneId`/`tabId` split a pane, `workspaceId` creates
+a tab, and a bare `cwd` creates a workspace. Rename and close
+come back as `POST /v1/workspaces/rename` (`tab.rename`/`workspace.rename`/
+`pane.rename`) and `POST /v1/workspaces/close` (`tab.close`/`workspace.close`/
+`pane.close`); the most specific id in the body wins.
 
 ## Running from a checkout
 
@@ -171,14 +181,19 @@ up a throwaway Unix listener.
 
 ## CLI compatibility
 
-The Moshi app SSHes in and runs `moshi-hook probe --json` and
-`moshi-hook doctor --json` to decide whether the host is usable. moshi-lite
-implements both:
+The Moshi app SSHes in and runs `moshi-hook probe --json`,
+`moshi-hook doctor --json`, and `moshi-hook cwd-list --json` to decide whether
+the host is usable and to populate its recent-project picker. moshi-lite
+implements all three:
 
 - `probe --json` → `{"installed":true,"running":true,"gateway":true,
   "version":"<gateway version>"}` when the local gateway answers `/v1/version`.
-- `doctor --json` → feature verdicts with `workspaces` **ok** (other Moshi
-  features are reported as not supported by moshi-lite).
+- `doctor --json` → feature verdicts: `workspaces` and the session picker
+  are **ok**; cloud/hook-only features are reported as not supported by
+  moshi-lite.
+- `cwd-list --json [--limit N]` → recent project directories scraped from
+  local Pi/Claude/Codex session state, deduped and recency-ranked, capped at
+  10 by default.
 
 `serve` (the gateway) and `version` are implemented too. Any other command is
 forwarded to `~/.local/bin/moshi-hook.official` if you keep an official binary

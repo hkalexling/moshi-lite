@@ -4,13 +4,19 @@
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use serde_json::{Value, json};
 
-use super::{FocusTarget, HerdrBackend, HerdrError, Snapshot};
+use super::{
+    CreateRequest, CreateTarget, FocusTarget, HerdrBackend, HerdrError, NodeTarget, Snapshot,
+};
 
 #[derive(Default)]
 pub struct MockBackend {
     snapshot: Mutex<Option<Snapshot>>,
     focus_calls: Mutex<Vec<FocusTarget>>,
+    create_calls: Mutex<Vec<(CreateTarget, CreateRequest)>>,
+    rename_calls: Mutex<Vec<(NodeTarget, String)>>,
+    close_calls: Mutex<Vec<NodeTarget>>,
 }
 
 impl MockBackend {
@@ -19,6 +25,9 @@ impl MockBackend {
         Self {
             snapshot: Mutex::new(Some(snapshot)),
             focus_calls: Mutex::new(Vec::new()),
+            create_calls: Mutex::new(Vec::new()),
+            rename_calls: Mutex::new(Vec::new()),
+            close_calls: Mutex::new(Vec::new()),
         }
     }
 
@@ -36,6 +45,27 @@ impl MockBackend {
         self.focus_calls
             .lock()
             .expect("focus lock poisoned")
+            .clone()
+    }
+
+    pub fn create_calls(&self) -> Vec<(CreateTarget, CreateRequest)> {
+        self.create_calls
+            .lock()
+            .expect("create lock poisoned")
+            .clone()
+    }
+
+    pub fn rename_calls(&self) -> Vec<(NodeTarget, String)> {
+        self.rename_calls
+            .lock()
+            .expect("rename lock poisoned")
+            .clone()
+    }
+
+    pub fn close_calls(&self) -> Vec<NodeTarget> {
+        self.close_calls
+            .lock()
+            .expect("close lock poisoned")
             .clone()
     }
 }
@@ -56,5 +86,57 @@ impl HerdrBackend for MockBackend {
             .expect("focus lock poisoned")
             .push(target);
         Ok(())
+    }
+
+    async fn rename(&self, target: NodeTarget, label: &str) -> Result<(), HerdrError> {
+        self.rename_calls
+            .lock()
+            .expect("rename lock poisoned")
+            .push((target, label.to_string()));
+        Ok(())
+    }
+
+    async fn close(&self, target: NodeTarget) -> Result<(), HerdrError> {
+        self.close_calls
+            .lock()
+            .expect("close lock poisoned")
+            .push(target);
+        Ok(())
+    }
+
+    async fn create(
+        &self,
+        target: CreateTarget,
+        request: CreateRequest,
+    ) -> Result<Value, HerdrError> {
+        let label = request
+            .label
+            .clone()
+            .or_else(|| request.cwd.clone())
+            .unwrap_or_else(|| "new".to_string());
+        let result = match &target {
+            CreateTarget::Workspace => json!({
+                "type": "workspace_created",
+                "workspace": { "workspace_id": "wNEW", "label": label, "focused": true },
+            }),
+            CreateTarget::Tab(workspace_id) => json!({
+                "type": "tab_created",
+                "tab": {
+                    "tab_id": format!("{workspace_id}:tNEW"),
+                    "workspace_id": workspace_id,
+                    "label": label,
+                    "focused": true,
+                },
+            }),
+            CreateTarget::TabPane(_) | CreateTarget::Pane(_) => json!({
+                "type": "pane_created",
+                "pane": { "pane_id": "wNEW:pNEW" },
+            }),
+        };
+        self.create_calls
+            .lock()
+            .expect("create lock poisoned")
+            .push((target, request));
+        Ok(result)
     }
 }

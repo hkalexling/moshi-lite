@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, Request, State};
 use axum::http::StatusCode;
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::cli;
-use crate::herdr::{FocusTarget, HerdrError};
+use crate::herdr::{CreateRequest, CreateTarget, FocusTarget, HerdrError, NodeTarget};
 use crate::model::{
     GatewayFrame, Mux, MuxList, PROTOCOL_VERSION, TreeChild, TreeGroup, TreePane, VersionInfo,
     WorkspaceTree, capabilities,
@@ -27,6 +28,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/workspaces", get(get_workspaces))
         .route("/v1/workspaces/panes", get(get_workspace_panes))
         .route("/v1/workspaces/focus", post(post_workspaces_focus))
+        .route("/v1/workspaces/create", post(post_workspaces_create))
+        .route("/v1/workspaces/rename", post(post_workspaces_rename))
+        .route("/v1/workspaces/close", post(post_workspaces_close))
         .route("/v1/diff/start", get(diff_start_probe).post(diff_start))
         .route(
             "/v1/integrations",
@@ -37,7 +41,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Temporary visibility into what clients actually request.
+/// Per-request debug logging, including request bodies up to 1 MiB so the
+/// app's undocumented actions can be inspected with `RUST_LOG=debug`.
 async fn log_request(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -47,7 +52,16 @@ async fn log_request(request: Request, next: Next) -> Response {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let response = next.run(request).await;
+    let (parts, body) = request.into_parts();
+    let bytes = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    if !bytes.is_empty() {
+        tracing::debug!(body = %String::from_utf8_lossy(&bytes), "gateway request body");
+    }
+    let response = next
+        .run(Request::from_parts(parts, Body::from(bytes)))
+        .await;
     tracing::debug!(
         %method,
         %uri,
@@ -135,6 +149,33 @@ impl FocusRequest {
     }
 }
 
+/// Rename/close request. The app sends `tabId`; the official daemon also
+/// accepts `workspaceId` and `paneId`, preferring the most specific id.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeRequest {
+    #[serde(default, alias = "workspace_id", alias = "group_id")]
+    workspace_id: Option<String>,
+    #[serde(default, alias = "tab_id", alias = "child_id")]
+    tab_id: Option<String>,
+    #[serde(default, alias = "pane_id")]
+    pane_id: Option<String>,
+    #[serde(default, alias = "name")]
+    label: Option<String>,
+}
+
+impl NodeRequest {
+    fn resolve_target(&self) -> Option<NodeTarget> {
+        if let Some(pane) = &self.pane_id {
+            return Some(NodeTarget::Pane(pane.clone()));
+        }
+        if let Some(tab) = &self.tab_id {
+            return Some(NodeTarget::Tab(tab.clone()));
+        }
+        self.workspace_id.clone().map(NodeTarget::Workspace)
+    }
+}
+
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -151,6 +192,13 @@ impl ApiError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
             message: message.into(),
         }
     }
@@ -257,6 +305,159 @@ async fn post_workspaces_focus(
         }
         Err(error) => Err(ApiError::backend(&error)),
     }
+}
+
+/// The app's create action. It is part of the app-mux contract but not listed
+/// in the published API docs, so the body is accepted leniently. The most
+/// specific target wins: `paneId` splits that pane, `tabId` splits the tab's
+/// focused pane, `workspaceId` creates a tab, and a bare `cwd` creates a
+/// workspace. The new node is always focused, like the official daemon.
+async fn post_workspaces_create(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    let request: Value = if body.is_empty() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_slice(&body).map_err(|error| {
+            ApiError::bad_request(format!("invalid workspace create body: {error}"))
+        })?
+    };
+    let cwd = string_field(&request, &["cwd", "path", "directory"]);
+    let target = create_target(&request, cwd.as_deref()).ok_or_else(|| {
+        ApiError::bad_request(
+            "workspace create requires a parent target or cwd: missing paneId, tabId, workspaceId, or cwd",
+        )
+    })?;
+    let create = CreateRequest {
+        cwd,
+        label: string_field(&request, &["label", "name"]),
+        env: string_map_field(&request, "env"),
+    };
+    let scope = target.scope();
+    let result = state
+        .backend
+        .create(target, create)
+        .await
+        .map_err(|error| ApiError::backend(&error))?;
+
+    let mut response = json!({
+        "ok": true,
+        "kind": "herdr",
+        "scope": scope,
+        "result": result,
+    });
+    for key in ["workspace", "tab", "pane"] {
+        if let Some(value) = result.get(key) {
+            response[key] = value.clone();
+        }
+    }
+    Ok(Json(response))
+}
+
+/// Resolve a create body to the node level the official daemon would create.
+fn create_target(request: &Value, cwd: Option<&str>) -> Option<CreateTarget> {
+    if let Some(pane) = string_field(request, &["paneId", "pane_id"]) {
+        return Some(CreateTarget::Pane(pane));
+    }
+    if let Some(tab) = string_field(request, &["tabId", "tab_id", "childId", "child_id"]) {
+        return Some(CreateTarget::TabPane(tab));
+    }
+    if let Some(workspace) = string_field(
+        request,
+        &["workspaceId", "workspace_id", "groupId", "group_id"],
+    ) {
+        return Some(CreateTarget::Tab(workspace));
+    }
+    cwd.map(|_| CreateTarget::Workspace)
+}
+
+/// The app's rename action, also outside the published API docs. The app sends
+/// `{"tabId":"…","label":"…"}`; the official daemon additionally accepts
+/// `workspaceId` and `paneId`, preferring the most specific id.
+async fn post_workspaces_rename(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    let request: NodeRequest = parse_request_body(&body)?;
+    let label = request.label.as_deref().ok_or_else(|| {
+        ApiError::bad_request("workspace rename requires a target and label: missing label")
+    })?;
+    let target = request.resolve_target().ok_or_else(|| {
+        ApiError::bad_request(
+            "workspace rename requires a target and label: missing workspaceId, tabId, or paneId",
+        )
+    })?;
+    state
+        .backend
+        .rename(target.clone(), label)
+        .await
+        .map_err(|error| ApiError::backend(&error))?;
+
+    let mut renamed = serde_json::Map::new();
+    renamed.insert(target.field().to_string(), json!(target.id()));
+    renamed.insert("label".to_string(), json!(label));
+    Ok(Json(json!({
+        "ok": true,
+        "kind": "herdr",
+        "renamed": Value::Object(renamed),
+    })))
+}
+
+/// The app's close action: `{"tabId":"…"}`, or `workspaceId`/`paneId`.
+async fn post_workspaces_close(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    let request: NodeRequest = parse_request_body(&body)?;
+    let target = request.resolve_target().ok_or_else(|| {
+        ApiError::bad_request(
+            "workspace close requires a target: missing workspaceId, tabId, or paneId",
+        )
+    })?;
+    state
+        .backend
+        .close(target.clone())
+        .await
+        .map_err(|error| ApiError::backend(&error))?;
+
+    let mut closed = serde_json::Map::new();
+    closed.insert(target.field().to_string(), json!(target.id()));
+    Ok(Json(json!({
+        "ok": true,
+        "kind": "herdr",
+        "closed": Value::Object(closed),
+    })))
+}
+
+fn parse_request_body<T>(body: &Bytes) -> Result<T, ApiError>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+    serde_json::from_slice(body)
+        .map_err(|error| ApiError::bad_request(format!("invalid request body: {error}")))
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str).map(str::to_string))
+}
+
+fn string_map_field(value: &Value, key: &str) -> std::collections::BTreeMap<String, String> {
+    value
+        .get(key)
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|text| (key.clone(), text.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The app probes diff support with `GET /v1/diff/start`; the official daemon

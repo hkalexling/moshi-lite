@@ -8,7 +8,7 @@ use axum::http::{Request, StatusCode};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use moshi_lite::herdr::mock::MockBackend;
-use moshi_lite::herdr::{FocusTarget, HerdrBackend, Snapshot};
+use moshi_lite::herdr::{CreateTarget, FocusTarget, HerdrBackend, NodeTarget, Snapshot};
 use moshi_lite::state::AppState;
 use moshi_lite::{config::Config, gateway};
 use serde_json::Value;
@@ -33,6 +33,29 @@ async fn get_json(app: axum::Router, path: &str) -> (StatusCode, Value) {
             Request::builder()
                 .uri(path)
                 .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+async fn post_json(app: axum::Router, path: &str, body: &str) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
                 .expect("request"),
         )
         .await
@@ -157,6 +180,99 @@ async fn workspace_panes_echoes_target() {
 }
 
 #[tokio::test]
+async fn workspace_create_posts_a_workspace_to_the_backend() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    state.poll_once().await.expect("poll");
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(
+        app,
+        "/v1/workspaces/create?session=ssh&sshConnection=1+2+3+4",
+        r#"{"cwd":"/tmp","label":"test"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["kind"], "herdr");
+    assert_eq!(body["scope"], "workspace");
+    assert_eq!(body["workspace"]["workspace_id"], "wNEW");
+
+    let calls = mock.create_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, CreateTarget::Workspace);
+    assert_eq!(calls[0].1.cwd.as_deref(), Some("/tmp"));
+    assert_eq!(calls[0].1.label.as_deref(), Some("test"));
+}
+
+#[tokio::test]
+async fn workspace_create_with_a_workspace_id_creates_a_tab() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(app, "/v1/workspaces/create", r#"{"workspaceId":"wB"}"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["scope"], "tab");
+    assert_eq!(body["tab"]["tab_id"], "wB:tNEW");
+
+    let calls = mock.create_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, CreateTarget::Tab("wB".to_string()));
+    assert_eq!(calls[0].1.cwd, None);
+}
+
+#[tokio::test]
+async fn workspace_create_with_a_tab_id_creates_a_pane() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(app, "/v1/workspaces/create", r#"{"tabId":"wB:t1"}"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["scope"], "pane");
+
+    let calls = mock.create_calls();
+    assert_eq!(calls[0].0, CreateTarget::TabPane("wB:t1".to_string()));
+}
+
+#[tokio::test]
+async fn workspace_create_prefers_the_most_specific_target() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(
+        app,
+        "/v1/workspaces/create",
+        r#"{"workspaceId":"wB","tabId":"wB:t1","paneId":"wB:p1","cwd":"/tmp"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["scope"], "pane");
+
+    let calls = mock.create_calls();
+    assert_eq!(calls[0].0, CreateTarget::Pane("wB:p1".to_string()));
+}
+
+#[tokio::test]
+async fn workspace_create_requires_a_target_or_cwd() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock.clone()));
+
+    let (status, _) = post_json(app.clone(), "/v1/workspaces/create", "{}").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = post_json(app, "/v1/workspaces/create", r#"{"label":"x"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(mock.create_calls().is_empty());
+}
+
+#[tokio::test]
 async fn focus_posts_selected_target() {
     let mock = Arc::new(MockBackend::new(fixture_snapshot()));
     let state = test_state(mock.clone());
@@ -201,6 +317,98 @@ async fn focus_requires_a_target() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn workspace_rename_targets_the_app_tab() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(
+        app,
+        "/v1/workspaces/rename?session=ssh&sshConnection=1+2+3+4",
+        r#"{"tabId":"wB:t1","label":"Rename"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["kind"], "herdr");
+    assert_eq!(body["renamed"]["tabId"], "wB:t1");
+    assert_eq!(body["renamed"]["label"], "Rename");
+    assert_eq!(
+        mock.rename_calls(),
+        vec![(NodeTarget::Tab("wB:t1".to_string()), "Rename".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn workspace_rename_prefers_the_most_specific_target() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(
+        app,
+        "/v1/workspaces/rename",
+        r#"{"workspaceId":"wB","tabId":"wB:t1","paneId":"wB:p1","label":"Triple"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["renamed"]["paneId"], "wB:p1");
+    assert_eq!(
+        mock.rename_calls(),
+        vec![(NodeTarget::Pane("wB:p1".to_string()), "Triple".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn workspace_rename_requires_a_label_and_target() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock.clone()));
+
+    let (status, _) = post_json(app.clone(), "/v1/workspaces/rename", r#"{"tabId":"wB:t1"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = post_json(app, "/v1/workspaces/rename", r#"{"label":"x"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(mock.rename_calls().is_empty());
+}
+
+#[tokio::test]
+async fn workspace_close_targets_the_app_tab() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let state = test_state(mock.clone());
+    let app = gateway::router(state);
+
+    let (status, body) = post_json(
+        app,
+        "/v1/workspaces/close?session=ssh&sshConnection=1+2+3+4",
+        r#"{"tabId":"wB:t1"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["kind"], "herdr");
+    assert_eq!(body["closed"]["tabId"], "wB:t1");
+    assert_eq!(
+        mock.close_calls(),
+        vec![NodeTarget::Tab("wB:t1".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn workspace_close_requires_a_target() {
+    let mock = Arc::new(MockBackend::new(fixture_snapshot()));
+    let app = gateway::router(test_state(mock.clone()));
+
+    let (status, _) = post_json(app, "/v1/workspaces/close", "{}").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(mock.close_calls().is_empty());
 }
 
 #[tokio::test]
